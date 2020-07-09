@@ -31,8 +31,10 @@ from torchvision import transforms
 
 from models.CDCNs import Conv2d_cd, CDCN, CDCNpp
 
-from Load_OULUNPU_train import Spoofing_train, Normaliztion, ToTensor, RandomHorizontalFlip, Cutout, RandomErasing
-from Load_OULUNPU_valtest import Spoofing_valtest, Normaliztion_valtest, ToTensor_valtest
+# from Load_OULUNPU_train import Spoofing_train, Normaliztion, ToTensor, RandomHorizontalFlip, Cutout, RandomErasing
+# from Load_OULUNPU_valtest import Spoofing_valtest, Normaliztion_valtest, ToTensor_valtest
+from dataset.load_oulunpu_train import Fas_train, Normaliztion, ToTensor, RandomHorizontalFlip, Cutout, RandomErasing
+from dataset.load_oulunpuy_valtest import Fas_valtest, Normaliztion_valtest, ToTensor_valtest
 
 
 import torch.nn.functional as F
@@ -47,17 +49,17 @@ from utils import AvgrageMeter, accuracy, performances
 
 
 # Dataset root
-train_image_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/Train_images/'        
-val_image_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/Dev_images/'     
-test_image_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/Test_images/'   
+train_image_dir = '/' # '/wrk/yuzitong/DONOTREMOVE/OULU/Train_images/'        
+val_image_dir = '/' # '/wrk/yuzitong/DONOTREMOVE/OULU/Dev_images/'     
+test_image_dir = '/' # '/wrk/yuzitong/DONOTREMOVE/OULU/Test_images/'   
    
-map_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/IJCB_re/OULUtrain_images/'   
-val_map_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/IJCB_re/OULUdev_images/' 
-test_map_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/IJCB_re/OULUtest_images/' 
+map_dir = '/' # '/wrk/yuzitong/DONOTREMOVE/OULU/IJCB_re/OULUtrain_images/'   
+val_map_dir = '/' # '/wrk/yuzitong/DONOTREMOVE/OULU/IJCB_re/OULUdev_images/' 
+test_map_dir = '/' # '/wrk/yuzitong/DONOTREMOVE/OULU/IJCB_re/OULUtest_images/' 
 
-train_list = '/wrk/yuzitong/DONOTREMOVE/OULU/OULU_Protocols/Protocol_1/Train.txt'
-val_list = '/wrk/yuzitong/DONOTREMOVE/OULU/OULU_Protocols/Protocol_1/Dev.txt'
-test_list =  '/wrk/yuzitong/DONOTREMOVE/OULU/OULU_Protocols/Protocol_1/Test.txt'
+train_list = '/ssd/ylzhang/public_data/OULU-NPU/list/train.list' # '/wrk/yuzitong/DONOTREMOVE/OULU/OULU_Protocols/Protocol_1/Train.txt'
+val_list = '/ssd/ylzhang/public_data/OULU-NPU/list/dev.list' # '/wrk/yuzitong/DONOTREMOVE/OULU/OULU_Protocols/Protocol_1/Dev.txt'
+test_list = '/ssd/ylzhang/public_data/OULU-NPU/list/test.list'#  '/wrk/yuzitong/DONOTREMOVE/OULU/OULU_Protocols/Protocol_1/Test.txt'
  
 
 
@@ -239,10 +241,8 @@ def train_test():
 
         
         #model = CDCN(basic_conv=Conv2d_cd, theta=0.7)
-	model = CDCNpp(basic_conv=Conv2d_cd, theta=0.7)
+        model = CDCNpp(basic_conv=Conv2d_cd, theta=0.7)
         
-
-
         model = model.cuda()
         #model = model.to(device[0])
         #model = nn.DataParallel(model, device_ids=device, output_device=device[0])
@@ -257,8 +257,6 @@ def train_test():
     criterion_absolute_loss = nn.MSELoss().cuda()
     criterion_contrastive_loss = Contrast_depth_loss().cuda() 
     
-
-
     #bandpass_filter_numpy = build_bandpass_filter_numpy(30, 30)  # fs, order  # 61, 64 
 
     ACER_save = 1.0
@@ -268,11 +266,8 @@ def train_test():
         if (epoch + 1) % args.step_size == 0:
             lr *= args.gamma
 
-        
         loss_absolute = AvgrageMeter()
-        loss_contra =  AvgrageMeter()
-        #top5 = utils.AvgrageMeter()
-        
+        loss_contra =  AvgrageMeter()        
         
         ###########################################
         '''                train             '''
@@ -280,9 +275,11 @@ def train_test():
         model.train()
         
         # load random 16-frame clip data every epoch
-        train_data = Spoofing_train(train_list, train_image_dir, map_dir, transform=transforms.Compose([RandomErasing(), RandomHorizontalFlip(),  ToTensor(), Cutout(), Normaliztion()]))
+        # train_data = Spoofing_train(train_list, train_image_dir, map_dir, transform=transforms.Compose([RandomErasing(), RandomHorizontalFlip(),  ToTensor(), Cutout(), Normaliztion()]))
+        train_data = Fas_train(train_list, transform=transforms.Compose([RandomErasing(), RandomHorizontalFlip(), ToTensor(), Cutout(), Normaliztion()]))
         dataloader_train = DataLoader(train_data, batch_size=args.batchsize, shuffle=True, num_workers=4)
-
+        print('train_set read done!')
+        
         for i, sample_batched in enumerate(dataloader_train):
             # get the inputs
             inputs, map_label, spoof_label = sample_batched['image_x'].cuda(), sample_batched['map_x'].cuda(), sample_batched['spoofing_label'].cuda() 
@@ -316,9 +313,9 @@ def train_test():
                 FeatureMap2Heatmap(x_input, x_Block1, x_Block2, x_Block3, map_x)
 
                 # log written
-                print('epoch:%d, mini-batch:%3d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f' % (epoch + 1, i + 1, lr,  loss_absolute.avg, loss_contra.avg))
-                #log_file.write('epoch:%d, mini-batch:%3d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f \n' % (epoch + 1, i + 1, lr, loss_absolute.avg, loss_contra.avg))
-                #log_file.flush()
+                print('epoch:%d, mini-batch:%3d/%6d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f' % (epoch + 1, i + 1, len(dataloader_train), lr,  loss_absolute.avg, loss_contra.avg))
+                log_file.write('epoch:%d, mini-batch:%3d/%6d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f \n' % (epoch + 1, i + 1, len(dataloader_train), lr, loss_absolute.avg, loss_contra.avg))
+                log_file.flush()
                 
             #break
         
@@ -343,7 +340,8 @@ def train_test():
                 '''                val             '''
                 ###########################################
                 # val for threshold
-                val_data = Spoofing_valtest(val_list, val_image_dir, val_map_dir, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
+                # val_data = Spoofing_valtest(val_list, val_image_dir, val_map_dir, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
+                val_data = Fas_valtest(val_list, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
                 dataloader_val = DataLoader(val_data, batch_size=1, shuffle=False, num_workers=4)
                 
                 map_score_list = []
@@ -370,8 +368,10 @@ def train_test():
                 with open(map_score_val_filename, 'w') as file:
                     file.writelines(map_score_list)                
                 
+
+                '''
                 ###########################################
-                '''                test             '''
+                '''                '''test'''             '''
                 ##########################################
                 # test for ACC
                 test_data = Spoofing_valtest(test_list, test_image_dir, test_map_dir, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
@@ -401,6 +401,7 @@ def train_test():
                 with open(map_score_test_filename, 'w') as file:
                     file.writelines(map_score_list)    
                 
+                '''
                 #############################################################     
                 #       performance measurement both val and test
                 #############################################################     
@@ -409,10 +410,9 @@ def train_test():
                 print('epoch:%d, Val:  val_threshold= %.4f, val_ACC= %.4f, val_ACER= %.4f' % (epoch + 1, val_threshold, val_ACC, val_ACER))
                 log_file.write('\n epoch:%d, Val:  val_threshold= %.4f, val_ACC= %.4f, val_ACER= %.4f \n' % (epoch + 1, val_threshold, val_ACC, val_ACER))
               
-                print('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
-                #print('epoch:%d, Test:  test_threshold= %.4f, test_ACER_test_threshold= %.4f\n' % (epoch + 1, test_threshold, test_ACER_test_threshold))
-                log_file.write('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f \n' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
-                #log_file.write('epoch:%d, Test:  test_threshold= %.4f, test_ACER_test_threshold= %.4f \n\n' % (epoch + 1, test_threshold, test_ACER_test_threshold))
+                # print('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
+                # log_file.write('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f \n' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
+                
                 log_file.flush()
                 
         #if epoch <1:    
@@ -429,9 +429,9 @@ def train_test():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="save quality using landmarkpose model")
-    parser.add_argument('--gpu', type=int, default=3, help='the gpu id used for predict')
+    parser.add_argument('--gpu', type=int, default=0, help='the gpu id used for predict')
     parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate')  
-    parser.add_argument('--batchsize', type=int, default=7, help='initial batchsize')  
+    parser.add_argument('--batchsize', type=int, default=4, help='initial batchsize')  
     parser.add_argument('--step_size', type=int, default=500, help='how many epochs lr decays once')  # 500 
     parser.add_argument('--gamma', type=float, default=0.5, help='gamma of optim.lr_scheduler.StepLR, decay of lr')
     parser.add_argument('--echo_batches', type=int, default=50, help='how many batches display once')  # 50

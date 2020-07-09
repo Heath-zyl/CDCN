@@ -1,21 +1,3 @@
-'''
-Code of 'Searching Central Difference Convolutional Networks for Face Anti-Spoofing' 
-By Zitong Yu & Zhuo Su, 2019
-
-If you use the code, please cite:
-@inproceedings{yu2020searching,
-    title={Searching Central Difference Convolutional Networks for Face Anti-Spoofing},
-    author={Yu, Zitong and Zhao, Chenxu and Wang, Zezheng and Qin, Yunxiao and Su, Zhuo and Li, Xiaobai and Zhou, Feng and Zhao, Guoying},
-    booktitle= {CVPR},
-    year = {2020}
-}
-
-Only for research purpose, and commercial use is not allowed.
-
-MIT License
-Copyright (c) 2020 
-'''
-
 from __future__ import print_function, division
 import os
 import torch
@@ -32,23 +14,26 @@ import os
 import imgaug.augmenters as iaa
 
 
- 
-
-
-#face_scale = 1.3  #default for test, for training , can be set from [1.2 to 1.5]
-
-# data augment from 'imgaug' --> Add (value=(-40,40), per_channel=True), GammaContrast (gamma=(0.5,1.5))
 seq = iaa.Sequential([
     iaa.Add(value=(-40,40), per_channel=True), # Add color 
     iaa.GammaContrast(gamma=(0.5,1.5)) # GammaContrast with a gamma of 0.5 to 1.5
 ])
 
 
+def pad_for_croped_map(image, scale):
+    h, w = image.shape
+    
+    h_new, w_new = h * scale, w * scale
+    h_pad, w_pad = int(h_new / 2.), int(w_new / 2.)
 
+    new_image = cv2.copyMakeBorder(image, h_pad, h_pad, w_pad, w_pad, cv2.BORDER_CONSTANT, 0)
 
-def crop_face_from_scene(image,face_name_full, scale):
-    f=open(face_name_full,'r')
+    return new_image
+
+def crop_face_from_scene(image, face_name_full, scale):
+    f = open(face_name_full, 'r')
     lines=f.readlines()
+
     y1,x1,w,h=[float(ele) for ele in lines[:4]]
     f.close()
     y2=y1+w
@@ -72,9 +57,6 @@ def crop_face_from_scene(image,face_name_full, scale):
     #region=image[y1:y2,x1:x2]
     region=image[x1:x2,y1:y2]
     return region
-
-
-
 
 
 # array
@@ -146,6 +128,7 @@ class Cutout(object):
         return {'image_x': img, 'map_x': map_x, 'spoofing_label': spoofing_label}
 
 
+
 class Normaliztion(object):
     """
         same as mxnet, normalize into [-1, 1]
@@ -195,101 +178,59 @@ class ToTensor(object):
         image_x = np.array(image_x)
         
         map_x = np.array(map_x)
-        
-                        
+                          
         spoofing_label_np = np.array([0],dtype=np.long)
         spoofing_label_np[0] = spoofing_label
-        
         
         return {'image_x': torch.from_numpy(image_x.astype(np.float)).float(), 'map_x': torch.from_numpy(map_x.astype(np.float)).float(), 'spoofing_label': torch.from_numpy(spoofing_label_np.astype(np.long)).long()}
 
 
-# /home/ztyu/FAS_dataset/OULU/Train_images/          6_3_20_5_121_scene.jpg        6_3_20_5_121_scene.dat
-# /home/ztyu/FAS_dataset/OULU/IJCB_re/OULUtrain_images/        6_3_20_5_121_depth1D.jpg
-class Spoofing_train(Dataset):
-
-    def __init__(self, info_list, root_dir, map_dir,  transform=None):
-
-        self.landmarks_frame = pd.read_csv(info_list, delimiter=',', header=None)
-        self.root_dir = root_dir
-        self.map_dir = map_dir
+# dataset
+class Fas_train(Dataset):
+    def __init__(self, info_list, transform=None):
         self.transform = transform
+        with open(info_list, 'r') as f:
+            self.infos = f.readlines()
 
-    def __len__(self):
-        return len(self.landmarks_frame)
+    def __getitem__(self, index):
+        info = self.infos[index]
+        scene_path, fas_label = info.split()[0].strip(), int(info.split()[1].strip())
+        face_path = scene_path.replace('scene.jpg', 'face.jpg')
+        box_path = scene_path.replace('scene.jpg', 'scene.dat')
+        map_path = face_path.replace('Train_images', 'Train_3D/Train_images').replace('.jpg', '_dep.jpg')
 
-    
-    def __getitem__(self, idx):
-        #print(self.landmarks_frame.iloc[idx, 0])
-        videoname = str(self.landmarks_frame.iloc[idx, 1])
-        image_path = os.path.join(self.root_dir, videoname)
-        map_path = os.path.join(self.map_dir, videoname)
-             
-        image_x, map_x = self.get_single_image_x(image_path, map_path, videoname)
-		    
-        spoofing_label = self.landmarks_frame.iloc[idx, 0]
-        if spoofing_label == 1:
-            spoofing_label = 1            # real
-        else:
-            spoofing_label = 0
-            map_x = np.zeros((32, 32))    # fake
+        if not os.path.isfile(box_path): # some scene.dat are missing
+            # print('==> NOT EXIST: {}'.format(box_path))
+            return self.__getitem__(index+1)
 
-
-        sample = {'image_x': image_x, 'map_x': map_x, 'spoofing_label': spoofing_label}
-
-        if self.transform:
-            sample = self.transform(sample)
-        return sample
-
-    def get_single_image_x(self, image_path, map_path, videoname):
-
-        frames_total = len([name for name in os.listdir(map_path) if os.path.isfile(os.path.join(map_path, name))])
-        
-        # random choose 1 frame
-        for temp in range(500):
-            image_id = np.random.randint(1, frames_total-1)
-            
-            s = "_%03d_scene" % image_id
-            image_name = videoname + s + '.jpg'
-            bbox_name = videoname + s + '.dat'
-            bbox_path = os.path.join(image_path, bbox_name)
-            s = "_%03d_depth1D" % image_id
-            map_name = videoname + s + '.jpg'
-            map_path2 = os.path.join(map_path, map_name)
-        
-            # some .dat & map files have been missing  
-            if os.path.exists(bbox_path) & os.path.exists(map_path2):
-                map_x_temp2 = cv2.imread(map_path2, 0)
-                if map_x_temp2 is not None:
-                    break
-        
-        
         # random scale from [1.2 to 1.5]
         face_scale = np.random.randint(12, 15)
         face_scale = face_scale/10.0
-        
-        
-        image_x = np.zeros((256, 256, 3))
-        map_x = np.zeros((32, 32))
- 
 
         # RGB
-        image_path = os.path.join(image_path, image_name)
-        image_x_temp = cv2.imread(image_path)
+        image_x = cv2.imread(scene_path)
 
-        # gray-map
-        map_path = os.path.join(map_path, map_name)
-        map_x_temp = cv2.imread(map_path, 0)
-         
-        image_x = cv2.resize(crop_face_from_scene(image_x_temp, bbox_path, face_scale), (256, 256))
-        # data augment from 'imgaug' --> Add (value=(-40,40), per_channel=True), GammaContrast (gamma=(0.5,1.5))
-        image_x_aug = seq.augment_image(image_x) 
+        # depth map
+        if fas_label == 1:
+            if not os.path.isfile(map_path):
+                print('==> NOT EXIST: {}'.format(map_path))
+                return self.__getitem__(index+1)
+            map_x = cv2.imread(map_path, cv2.IMREAD_UNCHANGED)
+            if map_x is None:
+                print('==> READ ERROR: {}'.format(map_path))
+                return self.__getitem__(index+1)
+            map_x = cv2.resize(pad_for_croped_map(map_x, face_scale), (32, 32))
+        else:
+            map_x = np.zeros((32, 32))
+
+        image_x = cv2.resize(crop_face_from_scene(image_x, box_path, face_scale), (256, 256))
+
+        sample = {'image_x': image_x, 'map_x': map_x, 'spoofing_label': fas_label}
+
+        if self.transform:
+            sample = self.transform(sample)
         
-        map_x = cv2.resize(crop_face_from_scene(map_x_temp, bbox_path, face_scale), (32, 32))
-        
-   
-        return image_x_aug, map_x
+        return sample
 
-
-
-
+    def __len__(self):
+        return len(self.infos)

@@ -183,10 +183,3 @@ class Spoofing_valtest(Dataset):
             
 			
         return image_x, val_map_x
-
-
-
-            
- 
-
-
