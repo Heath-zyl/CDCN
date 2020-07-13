@@ -20,7 +20,7 @@ face_scale = 1.3  #default for test and val
 
 
 def pad_for_croped_map(image, scale):
-    h, w = image.shape()
+    h, w = image.shape
     
     h_new, w_new = h * scale, w * scale
     h_pad, w_pad = int(h_new / 2.), int(w_new / 2.)
@@ -93,9 +93,9 @@ class ToTensor_valtest(object):
 
 
 class Fas_valtest(Dataset):
-    def __init__(self, info_list, transform=None, val=True):
+    def __init__(self, info_list, transform=None, mode='val'):
         self.transform = transform
-        self.val = val
+        self.mode = mode
 
         with open(info_list, 'r') as f:
             self.infos = f.readlines()
@@ -110,9 +110,9 @@ class Fas_valtest(Dataset):
     def __getitem__(self, idx):
         video_path = self.videos[idx]
 
-        if self.val:
+        if self.mode == 'val':
             map_path = video_path.replace('Dev_images', 'Dev_3D/Dev_images')
-        else:
+        elif self.mode == 'test':
             map_path = video_path.replace('Test_images', 'Test_3D/Test_images')
 
         image_x, val_map_x = self.get_images(video_path, map_path)
@@ -125,11 +125,13 @@ class Fas_valtest(Dataset):
             sample = self.transform(sample)
         return sample
 
+    def __len__(self):
+        return len(self.videos)
     
-    def get_images(video_path, map_path):
+    def get_images(self, video_path, map_path):
         files_total = len([name for name in os.listdir(video_path) if os.path.isfile(os.path.join(video_path, name))])//3
         interval = files_total // 10
-        videoname = video_path.split()[-1].strip()
+        videoname = video_path.split('/')[-1].strip()
 
         image_x = np.zeros((frames_total, 256, 256, 3))
         val_map_x = np.ones((frames_total, 32, 32))
@@ -145,10 +147,11 @@ class Fas_valtest(Dataset):
                 
                 scene_path = os.path.join(video_path, scene_name)
                 box_path = os.path.join(video_path, box_name)
-                map_path = scene_path.replace('scene.jpg', 'face_dep.jpg')
+                map_path_x = os.path.join(map_path, scene_name).replace('scene.jpg', 'face_dep.jpg')
+                # map_path = scene_path.replace('scene.jpg', 'face_dep.jpg')
 
-                if os.path.exists(box_path) and os.path.exists(map_path):    # some scene.dat are missing
-                    map_x = cv2.imread(map_path, cv2.IMREAD_UNCHANGED)
+                if os.path.exists(box_path) and os.path.exists(map_path_x):    # some scene.dat are missing
+                    map_x = cv2.imread(map_path_x, cv2.IMREAD_UNCHANGED)
                     if map_x is not None:
                         break
                     else:
@@ -158,20 +161,25 @@ class Fas_valtest(Dataset):
 
 
             # RGB
-            image_x = cv2.imread(scene_path)
-            # gray-map
-            val_map_x_temp = cv2.imread(map_path, 0)
+            image_x_temp = cv2.imread(scene_path)
 
-            image_x[ii,:,:,:] = cv2.resize(crop_face_from_scene(image_x, box_path, face_scale), (256, 256))
+            if not os.path.exists(map_path_x):
+                print('==> NOT EXIST: ', map_path_x)
+
+            # gray-map
+            val_map_x_temp = cv2.imread(map_path_x, 0)
+
+            image_x[ii,:,:,:] = cv2.resize(crop_face_from_scene(image_x_temp, box_path, face_scale), (256, 256))
             # transform to binary mask --> threshold = 0 
-            # temp = cv2.resize(crop_face_from_scene(val_map_x_temp, bbox_path, face_scale), (32, 32))
-            # temp = cv2.resize(pad_for_croped_map(val_map_x_temp, face_scale), (32, 32))
-            # np.where(temp < 1, temp, 1)
+            # temp = cv2.resize(crop_face_from_scene(val_map_x_temp, box_path, face_scale), (32, 32))
+            temp = cv2.resize(pad_for_croped_map(val_map_x_temp, face_scale), (32, 32))
+            np.where(temp < 1, temp, 1)
             
-            if val_map_x_temp is not None:
-                temp = np.ones((32, 32))
-            else:
-                temp = np.zeros((32, 32))
+            # if val_map_x_temp is not None:
+            #     temp = np.ones((32, 32))
+            # else:
+            #     temp = np.zeros((32, 32))
             val_map_x[ii,:,:] = temp
 
+        # print(image_x.shape, val_map_x.shape)
         return image_x, val_map_x

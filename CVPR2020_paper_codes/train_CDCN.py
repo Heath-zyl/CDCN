@@ -214,7 +214,7 @@ def train_test():
         os.makedirs(args.log)
     log_file = open(args.log+'_log_P1.txt', 'w')
     
-    writer = SummaryWriter(args.log + '/')
+    writer = SummaryWriter(args.log + '/runs/')
 
     echo_batches = args.echo_batches
 
@@ -228,21 +228,23 @@ def train_test():
     log_file.flush()
 
     # load the network, load the pre-trained model in UCF101?
-    finetune = args.finetune
-    if finetune==True:
-        print('finetune!\n')
-        log_file.write('finetune!\n')
+    is_load_model = args.is_load_model
+    if is_load_model==True:
+        print('loading model...\n')
+        print(args.model_path)
+        log_file.write('loading model...\n')
+        log_file.write(args.model_path)
         log_file.flush()
             
         model = CDCNpp(basic_conv=Conv2d_cd, theta=0.7)
+
+        model = nn.DataParallel(model)
         model = model.cuda()
-        # model = model.to(device[0])
-        # model = nn.DataParallel(model, device_ids=device, output_device=device[0])
-        model.load_state_dict(torch.load('xxx.pkl'))
+        model.load_state_dict(torch.load(args.model_path))
 
         lr = args.lr
         optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=0.00005)
-        milestones = [int(step.strip()) for step in args.lr_drop_step.split('.')]
+        milestones = [int(step.strip()) for step in args.lr_drop_step.split(' ')]
         scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones = milestones, gamma = args.gamma)
 
     else:
@@ -252,10 +254,8 @@ def train_test():
         
         #model = CDCN(basic_conv=Conv2d_cd, theta=0.7)
         model = CDCNpp(basic_conv=Conv2d_cd, theta=0.7)
-        
-        model = model.cuda()
-        #model = model.to(device[0])
-        #model = nn.DataParallel(model, device_ids=device, output_device=device[0])
+        model = nn.DataParallel(model)
+        model = model.cuda()        
 
         lr = args.lr
         optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=0.00005)
@@ -327,28 +327,28 @@ def train_test():
                 FeatureMap2Heatmap(x_input, x_Block1, x_Block2, x_Block3, map_x)
 
                 # log written
-                print('epoch:%d, mini-batch:%3d/%6d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f' % (epoch + 1, i + 1, len(dataloader_train), lr,  loss_absolute.avg, loss_contra.avg))
-                log_file.write('epoch:%d, mini-batch:%3d/%6d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f \n' % (epoch + 1, i + 1, len(dataloader_train), lr, loss_absolute.avg, loss_contra.avg))
+                print('epoch:%d, mini-batch:%3d/%4d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f' % (epoch + 1, i + 1, len(dataloader_train), lr,  loss_absolute.avg, loss_contra.avg))
+                log_file.write('epoch:%d, mini-batch:%3d/%4d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f \n' % (epoch + 1, i + 1, len(dataloader_train), lr, loss_absolute.avg, loss_contra.avg))
                 log_file.flush()
                 
-            #break
+            writer.add_scalar('loss', loss_absolute.avg + loss_contra.avg, iteration)
+            writer.add_scalar('lr', lr, iteration)
         
         # whole epoch average
-        writer.add_scalar('loss', loss_absolute.avg + loss_contra.avg, iteration)
-        writer.add_scalar('lr', lr, iteration)
         print('epoch:%d, Train:  Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f\n' % (epoch + 1, loss_absolute.avg, loss_contra.avg))
         log_file.write('epoch:%d, Train: Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f \n' % (epoch + 1, loss_absolute.avg, loss_contra.avg))
         log_file.flush()
            
     
                     
-        #### validation/test
-        if epoch <300:
-             epoch_test = 300   
-        else:
-            epoch_test = 5   
-        #epoch_test = 1
-        if epoch % epoch_test == epoch_test-1:    # test every 5 epochs  
+        # #### validation/test
+        # if epoch <300:
+        #      epoch_test = 300   
+        # else:
+        #     epoch_test = 5   
+        # #epoch_test = 1
+        if epoch % args.epoch_test == args.epoch_test-1:    # test every 5 epochs  
+            
             model.eval()
             
             with torch.no_grad():
@@ -357,11 +357,11 @@ def train_test():
                 ###########################################
                 # val for threshold
                 # val_data = Spoofing_valtest(val_list, val_image_dir, val_map_dir, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
-                val_data = Fas_valtest(val_list, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
-                dataloader_val = DataLoader(val_data, batch_size=1, shuffle=False, num_workers=4)
+                val_data = Fas_valtest(val_list, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]), mode = 'val')
+                dataloader_val = DataLoader(val_data, batch_size=1, shuffle=False, num_workers=8)
                 
                 map_score_list = []
-                
+                print('start to validate...')
                 for i, sample_batched in enumerate(dataloader_val):
                     # get the inputs
                     inputs, spoof_label = sample_batched['image_x'].cuda(), sample_batched['spoofing_label'].cuda()
@@ -380,21 +380,29 @@ def train_test():
                         
                     map_score_list.append('{} {}\n'.format(map_score, spoof_label[0][0]))
                     #pdb.set_trace()
+                
+                    if i % (len(dataloader_val) // 5) == 0:  
+                        # visualization
+                        FeatureMap2Heatmap(x_input, x_Block1, x_Block2, x_Block3, map_x)
+                        # log written
+                        print('val ==> epoch:%d, mini-batch:%3d/%4d...' % (epoch + 1, i + 1, len(dataloader_val)))
+                        log_file.write('val ==> epoch:%d, mini-batch:%3d/%4d...' % (epoch + 1, i + 1, len(dataloader_val)))
+                        log_file.flush()
+
                 map_score_val_filename = args.log+'_map_score_val.txt'
                 with open(map_score_val_filename, 'w') as file:
                     file.writelines(map_score_list)                
-                
 
-                '''
+
                 ###########################################
-                '''                '''test'''             '''
+                '''                test                '''
                 ##########################################
                 # test for ACC
-                test_data = Spoofing_valtest(test_list, test_image_dir, test_map_dir, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
+                test_data = Fas_valtest(test_list, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]), mode = 'test')
                 dataloader_test = DataLoader(test_data, batch_size=1, shuffle=False, num_workers=4)
                 
                 map_score_list = []
-                
+                print('start to test...')
                 for i, sample_batched in enumerate(dataloader_test):
                     # get the inputs
                     inputs, spoof_label = sample_batched['image_x'].cuda(), sample_batched['spoofing_label'].cuda()
@@ -402,7 +410,6 @@ def train_test():
         
                     optimizer.zero_grad()
                     
-                    #pdb.set_trace()
                     map_score = 0.0
                     for frame_t in range(inputs.shape[1]):
                         map_x, embedding, x_Block1, x_Block2, x_Block3, x_input =  model(inputs[:,frame_t,:,:,:])
@@ -413,11 +420,19 @@ def train_test():
                         
                     map_score_list.append('{} {}\n'.format(map_score, spoof_label[0][0]))
                 
+                    if i % (len(dataloader_test) // 5) == 0:    
+                        # visualization
+                        FeatureMap2Heatmap(x_input, x_Block1, x_Block2, x_Block3, map_x)
+                        # log written
+                        print('test ==> epoch:%d, mini-batch:%3d/%4d...' % (epoch + 1, i + 1, len(dataloader_val)))
+                        log_file.write('test ==> epoch:%d, mini-batch:%3d/%4d...' % (epoch + 1, i + 1, len(dataloader_val)))
+                        log_file.flush()
+
                 map_score_test_filename = args.log+'_map_score_test.txt'
                 with open(map_score_test_filename, 'w') as file:
                     file.writelines(map_score_list)    
                 
-                '''
+                
                 #############################################################     
                 #       performance measurement both val and test
                 #############################################################     
@@ -426,14 +441,18 @@ def train_test():
                 print('epoch:%d, Val:  val_threshold= %.4f, val_ACC= %.4f, val_ACER= %.4f' % (epoch + 1, val_threshold, val_ACC, val_ACER))
                 log_file.write('\n epoch:%d, Val:  val_threshold= %.4f, val_ACC= %.4f, val_ACER= %.4f \n' % (epoch + 1, val_threshold, val_ACC, val_ACER))
               
-                # print('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
-                # log_file.write('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f \n' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
-                
+                print('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
+                log_file.write('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f \n' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
                 log_file.flush()
                 
-        #if epoch <1:    
-        # save the model until the next improvement     
-        #    torch.save(model.state_dict(), args.log+'_%d.pkl' % (epoch + 1))
+                writer.add_scalar('val_ACER', val_ACER, iteration)
+                writer.add_scalar('test_ACER', test_ACER, iteration)
+   
+            # save the model until the next improvement     
+            print("saving model to {}".format(args.log+'_%d.pkl'.format(epoch + 1)))
+            log_file.write("saving model to {}".format(args.log+'_%d.pkl' % (epoch + 1)))
+            log_file.flush()
+            torch.save(model.state_dict(), args.log+'_%d.pkl' % (epoch + 1))
 
     print('Finished Training')
     writer.close()
@@ -445,17 +464,19 @@ def train_test():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="save quality using landmarkpose model")
-    parser.add_argument('--gpu', type=int, default=0, help='the gpu id used for predict')
+    # parser.add_argument('--gpu', type=int, default=0, help='the gpu id used for predict')
     parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate')  
-    parser.add_argument('--batchsize', type=int, default=1, help='initial batchsize')  
+    parser.add_argument('--batchsize', type=int, default=24, help='initial batchsize')  
     parser.add_argument('--lr_drop_step', type=str, default='500 1000' ,help='when lr decays')
     parser.add_argument('--gamma', type=float, default=0.5, help='gamma of optim.lr_scheduler.StepLR, decay of lr')
     parser.add_argument('--echo_batches', type=int, default=1, help='how many batches display once')  # 50
     parser.add_argument('--epochs', type=int, default=1400, help='total training epochs')
     parser.add_argument('--log', type=str, default="CDCNpp_P1", help='log and save model name')
-    parser.add_argument('--finetune', action='store_true', default=False, help='whether finetune other models')
+    parser.add_argument('--is_load_model', action='store_true', default=False, help='whether load other model')
+    parser.add_argument('--model_path', type=str, default="None", help='the path of model to be loaded')
     parser.add_argument('--exp_name', type=str, default="None", help='experiement name')
     parser.add_argument('--start_epochs', type=int, default=0, help='epoch number to start with')
+    parser.add_argument('--epoch_test', type=int, default=10, help='va/test interval')
 
     args = parser.parse_args()
     train_test()
